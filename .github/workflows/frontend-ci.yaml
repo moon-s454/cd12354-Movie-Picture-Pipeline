@@ -73,7 +73,7 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm test -- --watchAll=false
+        run: npm run test
         env:
           CI: true
 
@@ -114,7 +114,7 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm test -- --watchAll=false
+        run: npm run test
         env:
           CI: true
 
