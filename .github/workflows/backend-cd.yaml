@@ -1,7 +1,7 @@
-name: Backend Continuous Integration
+name: Backend Continuous Deployment
 
 on:
-  pull_request:
+  push:
     branches:
       - main
     paths:
@@ -25,14 +25,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: backend-pip-${{ runner.os }}-${{ hashFiles('starter/backend/Pipfile.lock') }}
-          restore-keys: |
-            backend-pip-${{ runner.os }}-
 
       - name: Install Pipenv
         run: pip install pipenv
@@ -60,14 +52,6 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: backend-pip-${{ runner.os }}-${{ hashFiles('starter/backend/Pipfile.lock') }}
-          restore-keys: |
-            backend-pip-${{ runner.os }}-
-
       - name: Install Pipenv
         run: pip install pipenv
 
@@ -93,27 +77,47 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          python-version: "3.10"
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: backend-pip-${{ runner.os }}-${{ hashFiles('starter/backend/Pipfile.lock') }}
-          restore-keys: |
-            backend-pip-${{ runner.os }}-
+      - name: Login to Amazon ECR Public
+        run: |
+          aws ecr-public get-login-password --region us-east-1 | \
+            docker login --username AWS --password-stdin public.ecr.aws
 
-      - name: Install Pipenv
-        run: pip install pipenv
-
-      - name: Install dependencies
-        run: pipenv install --dev
-
-      - name: Run tests
-        run: pipenv run test
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker image
-        run: docker build --tag mp-backend:latest .
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --tag $ECR_REGISTRY/backend:$IMAGE_TAG \
+            .
+
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/backend:$IMAGE_TAG
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region us-east-1 --name cluster
+
+      - name: Deploy to EKS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd k8s
+          kustomize edit set image backend=$ECR_REGISTRY/backend:$IMAGE_TAG
+          kubectl apply -k .
